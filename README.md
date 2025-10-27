@@ -147,7 +147,7 @@ docker-compose up -d
 open http://localhost:8000/demo.html
 ```
 
-## 📚 API Documentation
+## API Documentation
 
 ### Job Management
 
