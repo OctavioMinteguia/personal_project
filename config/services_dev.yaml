@@ -1,0 +1,33 @@
+parameters:
+    app.external_job_source_url: 'http://jobberwocky-extra-source:3001/api/jobs'
+    app.mailer_dsn: 'smtp://localhost:1025'
+
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+
+    App\:
+        resource: '../src/'
+        exclude:
+            - '../src/DependencyInjection/'
+            - '../src/Entity/'
+            - '../src/Kernel.php'
+
+    # External service client
+    App\Infrastructure\External\JobSourceClientInterface:
+        alias: App\Infrastructure\External\JobberwockyExtraSourceClient
+
+    # Email service
+    App\Application\Service\EmailServiceInterface:
+        alias: App\Infrastructure\Email\SymfonyMailerService
+
+    # Job repository
+    App\Domain\Repository\JobRepositoryInterface:
+        alias: App\Infrastructure\Repository\DoctrineJobRepository
+
+    # Job alert repository
+    App\Domain\Repository\JobAlertRepositoryInterface:
+        alias: App\Infrastructure\Repository\DoctrineJobAlertRepository
+
+

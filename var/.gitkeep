@@ -1,0 +1,3 @@
+# This file ensures the var directory structure exists
+# The actual database and log files are ignored by .gitignore
+

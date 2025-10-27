@@ -1,0 +1,42 @@
+# Composer
+/vendor/
+composer.phar
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs (keep structure but ignore log files)
+/var/log/*.log
+/var/logs/*.log
+
+# Cache
+/var/cache/
+/var/sessions/
+
+# Database (keep structure but ignore database files)
+/var/database/*.db
+/var/database/*.sqlite
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PHPUnit
+/coverage/
+.phpunit.cache/
+
+# Symfony
+/public/bundles/
+
+# Node.js
+external-source/node_modules/
+external-source/package-lock.json
+

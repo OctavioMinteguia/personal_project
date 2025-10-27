@@ -1,0 +1,24 @@
+doctrine:
+    dbal:
+        # With "url" parameters, you don't need to set "dbname", "user" or "password" parameters
+        # see https://symfony.com/doc/current/reference/configuration/doctrine.html#reference-doctrine-dbal-url
+        url: '%env(resolve:DATABASE_URL)%'
+
+        # if the server version is not explicitly defined, pdo_sqlite assumes the server supports "LIMIT" and other syntaxes
+        # see https://www.doctrine-project.org/projects/doctrine-dbal/en/latest/reference/platforms.html#platforms
+        server_version: '3.0'
+    orm:
+        auto_generate_proxy_classes: true
+        enable_lazy_ghost_objects: true
+        report_fields_where_declared: true
+        validate_xml_mapping: true
+        naming_strategy: doctrine.orm.naming_strategy.underscore_number_aware
+        auto_mapping: true
+        mappings:
+            App:
+                is_bundle: false
+                dir: '%kernel.project_dir%/src/Domain/Entity'
+                prefix: 'App\Domain\Entity'
+                alias: App
+
+
