@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\Controller;
 
+use App\Domain\Entity\Job;
 use App\Domain\Service\JobServiceInterface;
 use App\Domain\Service\JobAlertServiceInterface;
 use App\Domain\ValueObject\JobTitle;
@@ -90,6 +91,7 @@ class JobController
             $type = $request->query->get('type');
             $level = $request->query->get('level');
             $remote = $request->query->get('remote');
+            $source = $request->query->get('source');
             $limit = (int) ($request->query->get('limit', 50));
             $offset = (int) ($request->query->get('offset', 0));
 
@@ -122,10 +124,14 @@ class JobController
 
             // Combine and sort results
             $allJobs = array_merge($internalJobs, $externalJobs);
+            $allJobs = array_map(
+                fn($job) => $job instanceof Job ? $job->toArray() : $job,
+                $allJobs
+            );
             
             // Apply additional filtering to external jobs if needed
-            if ($query || $company || $location || $type || $level || $remote !== null) {
-                $allJobs = array_filter($allJobs, function($job) use ($query, $company, $location, $type, $level, $remote) {
+            if ($query || $company || $location || $type || $level || $remote !== null || $source) {
+                $allJobs = array_filter($allJobs, function($job) use ($query, $company, $location, $type, $level, $remote, $source) {
                     if ($query && !$this->matchesSearchQuery($job, $query)) {
                         return false;
                     }
@@ -142,6 +148,12 @@ class JobController
                         return false;
                     }
                     if ($remote !== null && ($job['remote'] ?? false) !== ($remote === 'true')) {
+                        return false;
+                    }
+                    if ($source === 'internal' && ($job['source'] ?? 'internal') !== 'internal') {
+                        return false;
+                    }
+                    if ($source === 'external' && ($job['source'] ?? 'internal') !== 'external') {
                         return false;
                     }
                     return true;
@@ -205,15 +217,16 @@ class JobController
         }
     }
 
-    private function matchesSearchQuery(array $job, string $query): bool
+    private function matchesSearchQuery(array|Job $job, string $query): bool
     {
+        $jobData = $job instanceof Job ? $job->toArray() : $job;
         $searchTerms = array_map('strtolower', explode(' ', $query));
         $searchableContent = strtolower(
-            ($job['title'] ?? '') . ' ' .
-            ($job['company'] ?? '') . ' ' .
-            ($job['description'] ?? '') . ' ' .
-            ($job['location'] ?? '') . ' ' .
-            (is_array($job['tags'] ?? null) ? implode(' ', $job['tags']) : '')
+            ($jobData['title'] ?? '') . ' ' .
+            ($jobData['company'] ?? '') . ' ' .
+            ($jobData['description'] ?? '') . ' ' .
+            ($jobData['location'] ?? '') . ' ' .
+            (is_array($jobData['tags'] ?? null) ? implode(' ', $jobData['tags']) : '')
         );
 
         foreach ($searchTerms as $term) {

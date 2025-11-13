@@ -58,6 +58,144 @@ function sendRealEmail($to, $subject, $body) {
     }
 }
 
+function normalizeExternalJob(array $jobData): ?array
+{
+    $title = $jobData['title'] ?? $jobData['job_title'] ?? $jobData['position'] ?? null;
+    $company = $jobData['company'] ?? $jobData['company_name'] ?? $jobData['employer'] ?? null;
+    $description = $jobData['description'] ?? $jobData['job_description'] ?? $jobData['details'] ?? null;
+
+    if ($title === null || $company === null || $description === null) {
+        return null;
+    }
+
+    $createdAt = $jobData['createdAt'] ?? $jobData['created_at'] ?? $jobData['posted_at'] ?? date('Y-m-d H:i:s');
+
+    return [
+        'id' => $jobData['id'] ?? $jobData['job_id'] ?? uniqid('external_', true),
+        'title' => $title,
+        'company' => $company,
+        'description' => $description,
+        'location' => $jobData['location'] ?? $jobData['city'] ?? $jobData['address'] ?? null,
+        'salary' => $jobData['salary'] ?? $jobData['compensation'] ?? $jobData['pay'] ?? null,
+        'type' => normalizeJobType($jobData['type'] ?? $jobData['employment_type'] ?? $jobData['job_type'] ?? 'full-time'),
+        'level' => normalizeJobLevel($jobData['level'] ?? $jobData['seniority'] ?? $jobData['experience_level'] ?? 'mid'),
+        'tags' => normalizeJobTags($jobData['tags'] ?? $jobData['skills'] ?? $jobData['technologies'] ?? []),
+        'remote' => normalizeRemoteValue($jobData['remote'] ?? $jobData['work_from_home'] ?? $jobData['telecommute'] ?? false),
+        'createdAt' => $createdAt,
+        'source' => 'external'
+    ];
+}
+
+function normalizeJobType(string $type): string
+{
+    $type = strtolower($type);
+    return match (true) {
+        in_array($type, ['full-time', 'fulltime', 'full_time', 'permanent'], true) => 'full-time',
+        in_array($type, ['part-time', 'parttime', 'part_time'], true) => 'part-time',
+        in_array($type, ['contract', 'contractor', 'freelance'], true) => 'contract',
+        in_array($type, ['internship', 'intern'], true) => 'internship',
+        default => 'full-time',
+    };
+}
+
+function normalizeJobLevel(string $level): string
+{
+    $level = strtolower($level);
+    return match (true) {
+        in_array($level, ['junior', 'entry', 'entry-level', 'entry_level'], true) => 'junior',
+        in_array($level, ['senior', 'sr', 'lead', 'principal'], true) => 'senior',
+        in_array($level, ['mid', 'middle', 'intermediate', 'medior'], true) => 'mid',
+        default => 'mid',
+    };
+}
+
+function normalizeJobTags(array|string $tags): array
+{
+    if (is_string($tags)) {
+        return array_filter(array_map('trim', explode(',', $tags)));
+    }
+
+    if (!is_array($tags)) {
+        return [];
+    }
+
+    return array_values($tags);
+}
+
+function normalizeRemoteValue(mixed $remote): bool
+{
+    if (is_string($remote)) {
+        $remote = strtolower($remote);
+        return in_array($remote, ['true', 'yes', '1', 'remote', 'wfh'], true);
+    }
+
+    return (bool) $remote;
+}
+
+function matchesSearch(array $job, string $query): bool
+{
+    if ($query === '') {
+        return true;
+    }
+
+    $searchTerms = array_map('strtolower', explode(' ', $query));
+    $content = strtolower(
+        ($job['title'] ?? '') . ' ' .
+        ($job['company'] ?? '') . ' ' .
+        ($job['description'] ?? '') . ' ' .
+        ($job['location'] ?? '') . ' ' .
+        (is_array($job['tags'] ?? null) ? implode(' ', $job['tags']) : '')
+    );
+
+    foreach ($searchTerms as $term) {
+        if ($term !== '' && str_contains($content, $term)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function passesFilters(array $job, string $query, string $company, string $location, string $type, string $level, ?string $remote, ?string $source): bool
+{
+    if ($query !== '' && !matchesSearch($job, $query)) {
+        return false;
+    }
+
+    if ($company !== '' && ($job['company'] ?? '') !== $company) {
+        return false;
+    }
+
+    if ($location !== '' && ($job['location'] ?? '') !== $location) {
+        return false;
+    }
+
+    if ($type !== '' && ($job['type'] ?? '') !== $type) {
+        return false;
+    }
+
+    if ($level !== '' && ($job['level'] ?? '') !== $level) {
+        return false;
+    }
+
+    if ($remote !== null && $remote !== '') {
+        $remoteBool = in_array(strtolower((string) $remote), ['1', 'true', 'yes'], true);
+        if (($job['remote'] ?? false) !== $remoteBool) {
+            return false;
+        }
+    }
+
+    if ($source === 'internal' && ($job['source'] ?? 'internal') !== 'internal') {
+        return false;
+    }
+
+    if ($source === 'external' && ($job['source'] ?? 'internal') !== 'external') {
+        return false;
+    }
+
+    return true;
+}
+
 // Route based on request data
 $input = null;
 if ($method === 'POST') {
@@ -237,75 +375,130 @@ if ($method === 'POST' && isset($input['email'])) {
     }
     
 } elseif ($method === 'GET') {
-    // Search jobs
+    // Search jobs (internal + external)
     $query = $_GET['q'] ?? '';
+    $company = $_GET['company'] ?? '';
     $location = $_GET['location'] ?? '';
     $type = $_GET['type'] ?? '';
     $level = $_GET['level'] ?? '';
     $remote = $_GET['remote'] ?? null;
-    $limit = $_GET['limit'] ?? 50;
+    $limit = (int) ($_GET['limit'] ?? 50);
+    $offset = (int) ($_GET['offset'] ?? 0);
+    $source = $_GET['source'] ?? '';
+    
+    $includeInternal = $source !== 'external';
+    $includeExternal = $source !== 'internal';
     
     try {
-        $sql = "SELECT * FROM jobs WHERE 1=1";
-        $params = [];
+        $allJobs = [];
         
-        if (!empty($query)) {
-            $sql .= " AND (title LIKE ? OR company LIKE ? OR description LIKE ?)";
-            $searchTerm = "%{$query}%";
-            $params = array_merge($params, [$searchTerm, $searchTerm, $searchTerm]);
+        if ($includeInternal) {
+            $sql = "SELECT * FROM jobs WHERE 1=1";
+            $params = [];
+            
+            if (!empty($query)) {
+                $sql .= " AND (title LIKE ? OR company LIKE ? OR description LIKE ?)";
+                $searchTerm = "%{$query}%";
+                $params = array_merge($params, [$searchTerm, $searchTerm, $searchTerm]);
+            }
+            
+            if (!empty($company)) {
+                $sql .= " AND company = ?";
+                $params[] = $company;
+            }
+            
+            if (!empty($location)) {
+                $sql .= " AND location LIKE ?";
+                $params[] = "%{$location}%";
+            }
+            
+            if (!empty($type)) {
+                $sql .= " AND type = ?";
+                $params[] = $type;
+            }
+            
+            if (!empty($level)) {
+                $sql .= " AND level = ?";
+                $params[] = $level;
+            }
+            
+            if ($remote !== null && $remote !== '') {
+                $remoteBool = in_array(strtolower((string) $remote), ['1', 'true', 'yes'], true);
+                $sql .= " AND remote = ?";
+                $params[] = $remoteBool ? 1 : 0;
+            }
+            
+            $sql .= " ORDER BY created_at DESC";
+            
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $internalJobs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $formattedInternal = array_map(function($job) {
+                return [
+                    'id' => $job['id'],
+                    'title' => $job['title'],
+                    'company' => $job['company'],
+                    'description' => $job['description'],
+                    'location' => $job['location'],
+                    'salary' => $job['salary'],
+                    'type' => $job['type'],
+                    'level' => $job['level'],
+                    'tags' => json_decode($job['tags'], true) ?: [],
+                    'remote' => (bool)$job['remote'],
+                    'createdAt' => $job['created_at'],
+                    'source' => $job['source'] ?? 'internal'
+                ];
+            }, $internalJobs);
+            
+            $allJobs = array_merge($allJobs, $formattedInternal);
         }
         
-        if (!empty($location)) {
-            $sql .= " AND location LIKE ?";
-            $params[] = "%{$location}%";
+        if ($includeExternal) {
+            $externalUrl = getenv('EXTERNAL_JOB_SOURCE_URL') ?: 'http://jobberwocky-extra-source:3001/api/jobs';
+            $externalResponse = @file_get_contents($externalUrl);
+            
+            if ($externalResponse !== false) {
+                $externalData = json_decode($externalResponse, true);
+                
+                if (is_array($externalData)) {
+                    $externalJobs = [];
+                    
+                    if (isset($externalData['data']) && is_array($externalData['data'])) {
+                        $externalJobs = $externalData['data'];
+                    } elseif (array_is_list($externalData)) {
+                        $externalJobs = $externalData;
+                    }
+                    
+                    foreach ($externalJobs as $externalJob) {
+                        $normalized = normalizeExternalJob($externalJob);
+                        if ($normalized !== null) {
+                            $allJobs[] = $normalized;
+                        }
+                    }
+                }
+            }
         }
         
-        if (!empty($type)) {
-            $sql .= " AND type = ?";
-            $params[] = $type;
-        }
+        $filteredJobs = array_values(array_filter($allJobs, function ($job) use ($query, $company, $location, $type, $level, $remote, $source) {
+            return passesFilters($job, $query, $company, $location, $type, $level, $remote, $source);
+        }));
         
-        if (!empty($level)) {
-            $sql .= " AND level = ?";
-            $params[] = $level;
-        }
+        usort($filteredJobs, function($a, $b) {
+            return strcmp($b['createdAt'] ?? '', $a['createdAt'] ?? '');
+        });
         
-        if ($remote !== null) {
-            $sql .= " AND remote = ?";
-            $params[] = $remote ? 1 : 0;
-        }
-        
-        $sql .= " ORDER BY created_at DESC LIMIT " . (int)$limit;
-        
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute($params);
-        $jobs = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        // Convert to proper format
-        $formattedJobs = array_map(function($job) {
-            return [
-                'id' => $job['id'],
-                'title' => $job['title'],
-                'company' => $job['company'],
-                'description' => $job['description'],
-                'location' => $job['location'],
-                'salary' => $job['salary'],
-                'type' => $job['type'],
-                'level' => $job['level'],
-                'tags' => json_decode($job['tags'], true) ?: [],
-                'remote' => (bool)$job['remote'],
-                'createdAt' => $job['created_at'],
-                'source' => $job['source']
-            ];
-        }, $jobs);
+        $total = count($filteredJobs);
+        $paginated = array_slice($filteredJobs, $offset, $limit);
         
         echo json_encode([
             'success' => true,
-            'data' => $formattedJobs,
+            'data' => $paginated,
             'pagination' => [
-                'total' => count($formattedJobs),
-                'limit' => (int)$limit,
-                'offset' => 0
+                'total' => $total,
+                'limit' => $limit,
+                'offset' => $offset,
+                'has_more' => ($offset + $limit) < $total
             ]
         ]);
         
